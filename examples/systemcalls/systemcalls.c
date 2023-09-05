@@ -1,5 +1,10 @@
 #include "systemcalls.h"
 
+#include <stdlib.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <unistd.h>
+
 /**
  * @param cmd the command to execute with system()
  * @return true if the command in @param cmd was executed
@@ -16,8 +21,24 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+    int ret = system(cmd);
 
-    return true;
+    // According to the manual
+    // 1. Status -1 is returned when the child process could not be created
+    //    or its status cannot be retrieved.
+    // 2. If a shell could not be executed in the child process, then the return
+    //    value is as if the child shell terminated by calling exit() with status 127
+    //
+    // The exit status can be examined with WIFEXITED and WEXITSTATUS macros. According
+    // to [2], WIFEXITED returns true if the child process exited normally.
+    //
+    // Reference:
+    // 1. https://man7.org/linux/man-pages/man3/system.3.html#RETURN_VALUE
+    // 2. https://man7.org/linux/man-pages/man2/waitpid.2.html#DESCRIPTION
+    if (ret == -1) {
+        return false;
+    }
+    return WIFEXITED(ret);
 }
 
 /**
@@ -34,20 +55,17 @@ bool do_system(const char *cmd)
 *   by the command issued in @param arguments with the specified arguments.
 */
 
-bool do_exec(int count, ...)
-{
+int mysystem(char *command[]);
+
+bool do_exec(int count, ...) {
     va_list args;
     va_start(args, count);
     char * command[count+1];
     int i;
-    for(i=0; i<count; i++)
-    {
+    for(i=0; i<count; i++) {
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
 
 /*
  * TODO:
@@ -58,10 +76,12 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
-
+    int ret = mysystem(command);
     va_end(args);
-
-    return true;
+    if (ret == -1) {
+        return false;
+    }
+    return WIFEXITED(ret);
 }
 
 /**
@@ -96,4 +116,30 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     va_end(args);
 
     return true;
+}
+
+int mysystem(char *command[]) {
+    pid_t child_pid = fork();
+    if (child_pid == -1) {
+        // Forking the process failed.
+        return -1;
+    }
+    if (child_pid == 0) {
+        // We are in the child process. Execute
+        // the given command here.
+        int exec_res = execv(command[0], command);
+        if (exec_res == -1) {
+            exit(127);
+        }
+    } else {
+        // We are in the parent process. Wait for the
+        // child to finish, collect the status and return
+        // the same to the caller.
+        int child_status;
+        waitpid(child_pid, &child_status, 0);
+        if (WIFEXITED(child_status)) {
+            return WEXITSTATUS(child_status);
+        }
+    }
+    return 0;
 }
