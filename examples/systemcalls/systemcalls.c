@@ -1,5 +1,6 @@
 #include "systemcalls.h"
 
+#include <fcntl.h>
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <sys/types.h>
@@ -55,7 +56,7 @@ bool do_system(const char *cmd)
 *   by the command issued in @param arguments with the specified arguments.
 */
 
-int mysystem(char *command[]);
+int mysystem(const char *output_file, char *command[]);
 
 bool do_exec(int count, ...) {
     va_list args;
@@ -76,7 +77,7 @@ bool do_exec(int count, ...) {
  *   as second argument to the execv() command.
  *
 */
-    int ret = mysystem(command);
+    int ret = mysystem(NULL, command);
     va_end(args);
     if (ret == -1) {
         return false;
@@ -100,11 +101,6 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
-
 /*
  * TODO
  *   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a refernce,
@@ -113,18 +109,46 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *
 */
 
+    int ret = mysystem(outputfile, command);
     va_end(args);
-
-    return true;
+    if (ret == -1) {
+        return false;
+    }
+    return WIFEXITED(ret);
 }
 
-int mysystem(char *command[]) {
+int mysystem(const char *output_file, char *command[]) {
+    // Flush stdout before forking the process. This is because
+    // the printf() performs buffered I/O. When the process is forked,
+    // the buffers are also copied and hence it could be printed twice.
+    // We avoid this by flushing the buffer which forces output and
+    // clearing up whatever needs to be printed.
+    if (fflush(stdout) == -1) {
+        return -1;
+    }
+
     pid_t child_pid = fork();
     if (child_pid == -1) {
         // Forking the process failed.
         return -1;
     }
     if (child_pid == 0) {
+        if (output_file != NULL) {
+            // If the output file is specified, we need to redirect
+            // the output to that file.
+            int fd = open(output_file, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+            if (fd == -1) {
+                exit(127);
+            }
+            // Now, we redirect the stdout to the file just opened
+            if (dup2(fd, STDOUT_FILENO) == -1) {
+                exit(127);
+            }
+            // close-on-exec flag is not inhertited on calling dup2().
+            // Hence, we should close the file descriptor as the newly
+            // execed process would get an extra one which is unnecessary.
+            close(fd);
+        }
         // We are in the child process. Execute
         // the given command here.
         int exec_res = execv(command[0], command);
