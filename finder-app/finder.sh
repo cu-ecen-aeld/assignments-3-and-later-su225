@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 if [ "$#" -ne 2 ]; then
   echo "Usage: $0 <filesdir> <searchstr>"
@@ -18,8 +18,11 @@ matchlines=0
 for file in $(find "$filesdir" -type f); do
   filecount=$((filecount+1))
   curmatchline=$(grep -c "$searchstr" "$file")
-  if (($curmatchline > 0)); then
-    matchlines=$((matchlines+$curmatchline))
+  # if (($curmatchline > 0)); then
+  #   matchlines=$((matchlines+$curmatchline))
+  # fi
+  if [ -n "$curmatchline" ] && [ "$curmatchline" -gt 0 ]; then
+    matchlines=$((matchlines+curmatchline))
   fi
 done
 

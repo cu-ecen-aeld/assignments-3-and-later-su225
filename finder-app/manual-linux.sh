@@ -62,6 +62,15 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     # running on. It is required to configure hardware drivers. This
     # is provided to the QEMU guest as DTB (Device Tree Blob)
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} dtbs
+
+    # After building the kernel successfully, we have to copy the kernel
+    # image into OUTDIR directory. The kernel image is located in
+    # arch/arm64/boot/Image within the kernel source tree.
+    cp ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}/
+
+    # Finally the kernel source tree should be clean. It could be
+    # dirty if we apply the patch in one of the previous steps.
+    git reset --hard HEAD
 fi
 
 echo "Adding the Image in outdir"
@@ -82,6 +91,8 @@ mkdir -p bin dev etc home lib lib64 proc sbin sys tmp usr var
 mkdir -p usr/bin usr/lib usr/sbin
 mkdir -p var/log
 
+mkdir -p home/conf
+
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/busybox" ]
 then
@@ -92,7 +103,7 @@ then
     ### Build and configure busybox
     # The last command builds the root filesystem
     make distclean
-    make -j$(nproc) ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
+    make defconfig
     make -j$(nproc) ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
 else
     cd busybox
@@ -123,9 +134,13 @@ CROSS_COMPILE=${CROSS_COMPILE} make build
 
 ### Copy the finder related scripts and executables to the /home directory
 ### on the target rootfs
-cp conf/username.txt ${OUTDIR}/rootfs/home
+cp conf/username.txt ${OUTDIR}/rootfs/home/conf
+cp conf/assignment.txt ${OUTDIR}/rootfs/home/conf
+
 cp finder.sh ${OUTDIR}/rootfs/home
+cp finder-test.sh ${OUTDIR}/rootfs/home
 cp writer ${OUTDIR}/rootfs/home
+cp autorun-qemu.sh ${OUTDIR}/rootfs/home
 
 ### Chown the root directory
 sudo chown -R root:root ${OUTDIR}/rootfs
