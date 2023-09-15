@@ -1,5 +1,10 @@
+CC ?= gcc
+CFLAGS ?= -Werror -Wall
+OBJS ?= writer.c
+TARGET ?= writer
+
 build:
-	$(CROSS_COMPILE)gcc -o writer writer.c -Werror -Wall
+	${CC} $(CFLAGS) $(INCLUDES) $(OBJS) -o $(TARGET) $(LDFLAGS)
 
 clean:
 	rm -f writer
