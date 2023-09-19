@@ -1,5 +1,5 @@
 CC ?= gcc
-CFLAGS ?= -Werror -Wall -std=gnu17
+CFLAGS ?= -g -Werror -Wall -std=gnu17
 OBJS ?= aesdsocket.c
 TARGET ?= aesdsocket
 
