@@ -1,6 +1,6 @@
 CC ?= gcc
 CFLAGS ?= -g -Werror -Wall -std=gnu17
-OBJS ?= aesdsocket.c
+OBJS ?= aesdsocket.c linebuffer.c
 TARGET ?= aesdsocket
 
 all:

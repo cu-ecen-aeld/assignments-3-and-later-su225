@@ -7,10 +7,13 @@
 #include <unistd.h>
 #include <netdb.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/sendfile.h>
 #include <arpa/inet.h>
+
+#include "linebuffer.h"
 
 #define AESD_DATAFILE_PATH    "/var/tmp/aesdsocketdata"
 #define AESD_SERVER_PORT      9000
@@ -19,74 +22,42 @@
 #define MAX_IP_LENGTH         32
 #define MAX_DATABUFFER_SIZE   1024
 
-/** 
- * Line buffer abstracts keeping the line in memory. This is
- * important for handling long lines. It is a stripped down
- * version of the string type in C++ - a vector of chars.
- */
-struct line_buffer {
-  char*  line;
-  ssize_t line_len;
-  ssize_t line_cap;
-};
-
-void line_buffer_init(struct line_buffer *buff) {
-  buff->line = NULL;
-  buff->line_len = 0;
-  buff->line_cap = 0;
-}
-
-void line_buffer_clear(struct line_buffer *buff) {
-  buff->line_len = 0;
-  memset(buff->line, 0, buff->line_cap);
-}
-
-void line_buffer_destroy(struct line_buffer *buff) {
-  if (buff->line != NULL) {
-    free(buff->line);
-  }
-}
-
-int line_buffer_append(struct line_buffer *buff, char *c, size_t csz) {
-  if (csz == 0) {
-    return buff->line_len;
-  }
-  int new_size = buff->line_len + csz;
-  bool needs_resize = new_size > buff->line_cap;
-  if (needs_resize) {
-    int reqd_cap = buff->line_cap;
-    if (reqd_cap == 0) {
-      reqd_cap = 1;
-    }
-    while (reqd_cap < new_size) {
-      reqd_cap <<= 1;
-    }
-    char *newline = (char *)calloc(reqd_cap * sizeof(char));
-    if (newline == NULL) {
-      perror("line-buffer: malloc failed");
-      return -1;
-    }
-    memcpy(newline, buff->line, buff->line_len);
-    if (buff->line != NULL) {
-        free(buff->line);
-    }
-    buff->line = newline;
-    buff->line_cap = reqd_cap;
-  }
-  memcpy(buff->line + buff->line_len, c, csz);
-  buff->line_len = new_size;
-  return buff->line_len;
-}
-
-char *line_buffer_get(struct line_buffer *buff, ssize_t *len) {
-  *len = buff->line_len;
-  return buff->line;
-}
-
 void get_peer_address(struct sockaddr *addr, char *addr_buffer, int maxlen);
 
+int sockfd;
+int clientsockfd;
+int outfilefd;
+
+void signal_handler(int signo) {
+  if (signo != SIGTERM && signo != SIGINT) {
+    return;
+  }
+  syslog(LOG_INFO, "Caught signal, exiting");
+  close(sockfd);
+  close(clientsockfd);
+  close(outfilefd);
+  unlink(AESD_DATAFILE_PATH);
+  exit(EXIT_SUCCESS);
+}
+
 int main(void) {
-  int             sockfd;
+  struct sigaction sa;
+  sa.sa_handler = signal_handler;
+  
+  sigemptyset(&sa.sa_mask);
+  sigaddset(&sa.sa_mask, SIGINT);
+  sigaddset(&sa.sa_mask, SIGTERM);
+
+  if (sigaction(SIGTERM, &sa, NULL) == -1) {
+    perror("failed to register handler for SIGTERM");
+    exit(EXIT_FAILURE);
+  }
+
+  if (sigaction(SIGINT, &sa, NULL) == -1) {
+    perror("failed to register handler for SIGINT");
+    exit(EXIT_FAILURE);
+  }
+
   struct addrinfo hints;
   struct addrinfo *servinfo;
 
@@ -111,13 +82,14 @@ int main(void) {
     perror("cannot bind the socket to port 9000");
     exit(EXIT_FAILURE);
   }
+  freeaddrinfo(servinfo);
   
   if (listen(sockfd, SOMAXCONN) == -1) {
     perror("error listening on the socket");
     exit(EXIT_FAILURE);
   }
 
-  int outfilefd = open(AESD_DATAFILE_PATH, O_CREAT | O_TRUNC | O_RDWR | O_APPEND, 0666);
+  outfilefd = open(AESD_DATAFILE_PATH, O_CREAT | O_TRUNC | O_RDWR | O_APPEND, 0666);
   if (outfilefd == -1) {
     perror("error while opening the output file");
     exit(EXIT_FAILURE);
@@ -125,7 +97,6 @@ int main(void) {
 
   openlog(NULL, 0, LOG_USER);
 
-  int             clientsockfd;
   struct sockaddr client_address;
   socklen_t       client_address_len = sizeof(client_address);
   char            client_addr_buffer[MAX_IP_LENGTH+1];
@@ -166,7 +137,7 @@ int main(void) {
         if (data_buffer[i] != '\n') {
           continue;
         }
-        line_buffer_append(&lb, data_buffer+start, i-start);
+        line_buffer_append(&lb, data_buffer+start, i-start+1);
         char *line = line_buffer_get(&lb, &line_len);
         int bytes_written = write(outfilefd, line, line_len);
         if (bytes_written < 0) {
