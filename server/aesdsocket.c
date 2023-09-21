@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/sendfile.h>
+#include <sys/stat.h>
 #include <arpa/inet.h>
 
 #include "linebuffer.h"
@@ -32,16 +33,27 @@ void signal_handler(int signo) {
   if (signo != SIGTERM && signo != SIGINT) {
     return;
   }
-  syslog(LOG_INFO, "Caught signal, exiting");
+  const char *msg = "Caught signal, exiting";
+  write(STDOUT_FILENO, msg, strlen(msg));
   close(sockfd);
   close(clientsockfd);
   close(outfilefd);
   unlink(AESD_DATAFILE_PATH);
-  exit(EXIT_SUCCESS);
+  closelog();
+  _exit(EXIT_SUCCESS);
 }
 
-int main(void) {
+int main(int argc, char* argv[]) {
+  bool daemon_mode = false;
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "-d") == 0) {
+      daemon_mode = true;
+      break;
+    }
+  }
+
   struct sigaction sa;
+  sa.sa_flags = 0;
   sa.sa_handler = signal_handler;
   
   sigemptyset(&sa.sa_mask);
@@ -83,6 +95,33 @@ int main(void) {
     exit(EXIT_FAILURE);
   }
   freeaddrinfo(servinfo);
+
+  if (daemon_mode) {
+    pid_t childpid = fork();
+    if (childpid < 0) {
+      perror("failed to fork() a daemon process");
+      exit(EXIT_FAILURE);
+    }
+    if (childpid != 0) {
+      // We are inside the parent
+      exit(EXIT_SUCCESS);
+    } else {
+      // We are inside the child and we have to
+      // daemonise this process
+      umask(0);
+      if (setsid() < 0) {
+        perror("daemonize: error on setsid()");
+        exit(EXIT_FAILURE);
+      }
+      if (chdir("/") < 0) {
+        perror("daemonize: error on chdir()");
+        exit(EXIT_FAILURE);
+      }
+      close(STDIN_FILENO);
+      close(STDOUT_FILENO);
+      close(STDERR_FILENO);
+    }
+  }
   
   if (listen(sockfd, SOMAXCONN) == -1) {
     perror("error listening on the socket");
@@ -101,7 +140,7 @@ int main(void) {
   socklen_t       client_address_len = sizeof(client_address);
   char            client_addr_buffer[MAX_IP_LENGTH+1];
   char            data_buffer[MAX_DATABUFFER_SIZE];
-  
+
   struct line_buffer lb;
   ssize_t            line_len;
 
