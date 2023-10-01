@@ -1,3 +1,6 @@
+#ifndef __AESDSOCKET_ASSIGNMENT_LINEBUFFER_H
+#define __AESDSOCKET_ASSIGNMENT_LINEBUFFER_H
+
 #include <stdio.h>
 
 /** 
@@ -16,3 +19,5 @@ void line_buffer_clear(line_buffer_t *buff);
 void line_buffer_destroy(line_buffer_t *buff);
 int line_buffer_append(line_buffer_t *buff, char *c, size_t csz);
 char *line_buffer_get(line_buffer_t *buff, ssize_t *len);
+
+#endif
