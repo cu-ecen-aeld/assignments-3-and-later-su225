@@ -1,8 +1,11 @@
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdbool.h>
 
 #include "linkedlist.h"
+
+static linked_list_node_t *linked_list_node_create_with_data(void *data);
 
 linked_list_t linked_list_create() {
   linked_list_t list = {
@@ -107,6 +110,8 @@ static linked_list_node_t *linked_list_node_create_with_data(void *data) {
     perror("cannot allocate new linked list node");
     return NULL;   
   }
+  new_node->next = NULL;
+  new_node->prev = NULL;
   new_node->data = data;
   return new_node;
 }

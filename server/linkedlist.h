@@ -19,5 +19,10 @@ linked_list_t linked_list_create();
 linked_list_node_t* linked_list_append_front(linked_list_t *list, void *data);
 linked_list_node_t* linked_list_append_back(linked_list_t *list, void *data);
 void linked_list_foreach_node(linked_list_t *list, void (*f)(linked_list_node_t *node));
+void linked_list_remove_node(
+  linked_list_t *list,
+  linked_list_node_t *to_remove,
+  void (*node_data_cleanup_func)(linked_list_node_t *)
+);
 
 #endif
