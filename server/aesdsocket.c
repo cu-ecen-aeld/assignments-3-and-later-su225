@@ -13,6 +13,29 @@
 
 #include "connhandler.h"
 
+static pthread_t sig_handler_thread;
+
+static void *__signal_handler(void *data) {
+  sigset_t *set = (sigset_t *)data;
+  int s, sig;
+  for (;;) {
+    s = sigwait(set, &sig);
+    if (s != 0) {
+      perror("error while waiting for the signal");
+      exit(EXIT_FAILURE);  
+    }
+    printf("got signal: %d", sig);
+    syslog(LOG_INFO, "Caught signal, exiting");
+    closelog();
+    conn_handler_subsystem_shutdown();
+    _exit(EXIT_SUCCESS);
+  }
+}
+
+static void _launch_signal_handler_thread(sigset_t *sigmask) {
+  pthread_create(&sig_handler_thread, NULL, __signal_handler, sigmask);
+}
+
 int main(int argc, char* argv[]) {
   bool daemon_mode = false;
   for (int i = 1; i < argc; i++) {
@@ -58,22 +81,14 @@ int main(int argc, char* argv[]) {
   sigemptyset(&set);
   sigaddset(&set, SIGINT);
   sigaddset(&set, SIGTERM);
+  if (pthread_sigmask(SIG_BLOCK, &set, NULL) < 0) {
+    perror("error while masking out the signals in main thread");
+    exit(EXIT_FAILURE);
+  }
 
   openlog(NULL, 0, LOG_USER);
+  _launch_signal_handler_thread(&set);
   conn_handler_subsystem_init();
-
-  int s, sig;
-  for (;;) {
-    s = sigwait(&set, &sig);
-    if (s != 0) {
-      perror("error while waiting for the signal");
-      exit(EXIT_FAILURE);  
-    }
-    syslog(LOG_INFO, "Caught signal, exiting");
-    closelog();
-    conn_handler_subsystem_shutdown();
-    _exit(EXIT_SUCCESS);
-  }
 
   return 0;
 }

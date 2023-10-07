@@ -25,7 +25,6 @@
 
 static linked_list_t conn_handlers;
 
-static pthread_t server_thread;
 static pthread_t timestamp_logger_thread;
 
 static pthread_mutex_t outfile_lock;
@@ -35,15 +34,15 @@ static int sockfd;
 
 static atomic_bool close_conn_handler;
 
-static void *_conn_handler_do(void *a);
+static void __conn_handler_server();
 static void _conn_handler_free_handler_data(linked_list_node_t *node);
 static void _conn_handler_subsystem_init_outfile();
-static void _conn_handler_subsystem_init_server();
 static void _conn_handler_subsystem_start_timestamp_logger();
+static void _conn_handler_close_sockets(linked_list_node_t *node);
+static void *_conn_handler_do(void *a);
 
 static int __conn_handler_write_to_outfile_threadsafe(char *line, size_t line_len);
 static void *__conn_handler_timestamp_logger(void *a);
-static void *__conn_handler_server(void *a);
 
 static void get_peer_address(struct sockaddr *addr, char *addr_buffer, int maxlen);
 
@@ -51,15 +50,29 @@ void conn_handler_subsystem_init() {
   atomic_store(&close_conn_handler, false);
   conn_handlers = linked_list_create();
   _conn_handler_subsystem_init_outfile();
-  _conn_handler_subsystem_init_server();
-  _conn_handler_subsystem_start_timestamp_logger(); 
+  _conn_handler_subsystem_start_timestamp_logger();
+  __conn_handler_server(); 
 }
 
-static void _conn_handler_subsystem_init_server() {
-  pthread_create(&server_thread, NULL, __conn_handler_server, NULL);
+void conn_handler_subsystem_shutdown() {
+  atomic_store(&close_conn_handler, true);
+
+  close(sockfd);
+  linked_list_destroy(&conn_handlers, _conn_handler_close_sockets);
+
+  // Hold the lock while closing the outfile so that there are no
+  // concurrent I/Os while this happens.
+  pthread_mutex_lock(&outfile_lock);
+  close(outfilefd);
+  if (unlink(AESD_DATAFILE_PATH) < 0) {
+    perror("failed to delete the datafile");
+  }
+  pthread_mutex_unlock(&outfile_lock);
+  pthread_cancel(timestamp_logger_thread);
+  pthread_join(timestamp_logger_thread, NULL);
 }
 
-static void *__conn_handler_server(void *data) {
+static void __conn_handler_server() {
   struct addrinfo hints;
   struct addrinfo *servinfo;
 
@@ -108,7 +121,6 @@ static void *__conn_handler_server(void *data) {
     
     conn_handler_create_and_launch_handler(clientsockfd, client_addr_buffer);
   }
-  return NULL;
 }
 
 static void _conn_handler_close_sockets(linked_list_node_t *node) {
@@ -119,25 +131,6 @@ static void _conn_handler_close_sockets(linked_list_node_t *node) {
   close(h->clientsockfd);
   // pthread_join(h->handler_thread, NULL);
   _conn_handler_free_handler_data(node);
-}
-
-void conn_handler_subsystem_shutdown() {
-  atomic_store(&close_conn_handler, true);
-
-  close(sockfd);
-  linked_list_destroy(&conn_handlers, _conn_handler_close_sockets);
-
-  // Hold the lock while closing the outfile so that there are no
-  // concurrent I/Os while this happens.
-  pthread_mutex_lock(&outfile_lock);
-  close(outfilefd);
-  if (unlink(AESD_DATAFILE_PATH) < 0) {
-    perror("failed to delete the datafile");
-  }
-  pthread_mutex_unlock(&outfile_lock);
-  pthread_cancel(timestamp_logger_thread);
-  pthread_join(timestamp_logger_thread, NULL);
-  pthread_join(server_thread, NULL);
 }
 
 static void _conn_handler_subsystem_init_outfile() {
