@@ -104,6 +104,16 @@ void linked_list_remove_node(
   free(to_remove);
 }
 
+void linked_list_destroy(linked_list_t *list, void (*node_data_cleanup_func)(linked_list_node_t *)) {
+  linked_list_node_t *cur_node = list->head;
+  while (cur_node != NULL) {
+    linked_list_node_t *next_node = cur_node->next;
+    node_data_cleanup_func(cur_node->data);
+    free(cur_node);
+    cur_node = next_node;
+  }
+}
+
 static linked_list_node_t *linked_list_node_create_with_data(void *data) {
   linked_list_node_t *new_node = (linked_list_node_t*)malloc(sizeof(linked_list_node_t));
   if (new_node == NULL) {

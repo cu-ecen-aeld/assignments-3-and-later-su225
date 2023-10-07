@@ -9,9 +9,12 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
 #include <time.h>
 #include <signal.h>
 #include <errno.h>
+#include <arpa/inet.h>
 
 #include "connhandler.h"
 #include "linkedlist.h"
@@ -21,35 +24,120 @@
 #define TIMESTAMP_INTERVAL_SECS 10
 
 static linked_list_t conn_handlers;
+
+static pthread_t server_thread;
 static pthread_t timestamp_logger_thread;
+
 static pthread_mutex_t outfile_lock;
+
 static int outfilefd;
+static int sockfd;
 
 static atomic_bool close_conn_handler;
-static atomic_bool shutdown_complete;
 
 static void *_conn_handler_do(void *a);
 static void _conn_handler_free_handler_data(linked_list_node_t *node);
 static void _conn_handler_subsystem_init_outfile();
+static void _conn_handler_subsystem_init_server();
 static void _conn_handler_subsystem_start_timestamp_logger();
 
 static int __conn_handler_write_to_outfile_threadsafe(char *line, size_t line_len);
 static void *__conn_handler_timestamp_logger(void *a);
+static void *__conn_handler_server(void *a);
+
+static void get_peer_address(struct sockaddr *addr, char *addr_buffer, int maxlen);
 
 void conn_handler_subsystem_init() {
   atomic_store(&close_conn_handler, false);
-  atomic_store(&shutdown_complete, false);
   conn_handlers = linked_list_create();
   _conn_handler_subsystem_init_outfile();
+  _conn_handler_subsystem_init_server();
   _conn_handler_subsystem_start_timestamp_logger(); 
 }
 
-void conn_handler_subsystem_begin_shutdown() {
-  atomic_store(&close_conn_handler, true);
+static void _conn_handler_subsystem_init_server() {
+  pthread_create(&server_thread, NULL, __conn_handler_server, NULL);
 }
 
-bool conn_handler_subsystem_is_shutdown_complete() {
-  return atomic_load(&shutdown_complete);
+static void *__conn_handler_server(void *data) {
+  struct addrinfo hints;
+  struct addrinfo *servinfo;
+
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
+
+  int status = getaddrinfo(NULL, "9000", &hints, &servinfo);
+  if (status != 0) {
+    fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+    exit(EXIT_FAILURE);
+  }
+
+  sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (sockfd == -1) {
+    perror("cannot create server socket");
+    freeaddrinfo(servinfo);
+    exit(EXIT_FAILURE);
+  }
+
+  if (bind(sockfd, servinfo->ai_addr, sizeof(*(servinfo->ai_addr))) != 0) {
+    perror("cannot bind the socket to port 9000");
+    freeaddrinfo(servinfo);
+    exit(EXIT_FAILURE);
+  }
+  freeaddrinfo(servinfo);
+  
+  if (listen(sockfd, SOMAXCONN) == -1) {
+    perror("error listening on the socket");
+    exit(EXIT_FAILURE);
+  }
+
+  while(!atomic_load(&close_conn_handler)) {
+    struct sockaddr client_address;
+    socklen_t client_address_len = sizeof(client_address);
+    char client_addr_buffer[MAX_IP_LENGTH+1];
+
+    int clientsockfd = accept(sockfd, &client_address, &client_address_len);
+    if (clientsockfd < 0) {
+      perror("error while accept()");
+      break;
+    }
+    get_peer_address(&client_address, client_addr_buffer, MAX_IP_LENGTH+1);
+    syslog(LOG_INFO, "Accepted connection from %s", client_addr_buffer);
+    
+    conn_handler_create_and_launch_handler(clientsockfd, client_addr_buffer);
+  }
+  return NULL;
+}
+
+static void _conn_handler_close_sockets(linked_list_node_t *node) {
+  conn_handler_t *h = (conn_handler_t *)(node->data);
+  if (shutdown(h->clientsockfd, SHUT_RDWR) != 0) {
+    perror("failed to shutdown client socket");
+  }
+  close(h->clientsockfd);
+  // pthread_join(h->handler_thread, NULL);
+  _conn_handler_free_handler_data(node);
+}
+
+void conn_handler_subsystem_shutdown() {
+  atomic_store(&close_conn_handler, true);
+
+  close(sockfd);
+  linked_list_destroy(&conn_handlers, _conn_handler_close_sockets);
+
+  // Hold the lock while closing the outfile so that there are no
+  // concurrent I/Os while this happens.
+  pthread_mutex_lock(&outfile_lock);
+  close(outfilefd);
+  if (unlink(AESD_DATAFILE_PATH) < 0) {
+    perror("failed to delete the datafile");
+  }
+  pthread_mutex_unlock(&outfile_lock);
+  pthread_cancel(timestamp_logger_thread);
+  pthread_join(timestamp_logger_thread, NULL);
+  pthread_join(server_thread, NULL);
 }
 
 static void _conn_handler_subsystem_init_outfile() {
@@ -75,6 +163,11 @@ static void *__conn_handler_timestamp_logger(void *a) {
     if (rem_time > 0 && atomic_load(&close_conn_handler)) {
       return NULL;
     }
+
+    if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL) < 0) {
+      perror("failed to disable timestamp logger cancelation");
+      exit(EXIT_FAILURE);
+    }
     time_t t = time(NULL);
     struct tm *tm_info = localtime(&t);
     strftime(timestamp_buffer, TIME_BUFFER_SIZE, "timestamp:%a, %d %b %Y %T %z\n", tm_info);
@@ -83,10 +176,16 @@ static void *__conn_handler_timestamp_logger(void *a) {
     int bytes_written = __conn_handler_write_to_outfile_threadsafe(timestamp_buffer, ts_len);
     if (bytes_written < 0) {
       perror("error while appending timestamp");
-      continue;
+      goto reenable_thread_cancelation;
     }
     if (bytes_written < ts_len) {
       syslog(LOG_WARNING, "fewer bytes written than timestamp. Maybe running out of disk space");
+    }
+  
+  reenable_thread_cancelation:
+    if (pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL) < 0) {
+      perror("failed to re-enable timestamp logger cancelation");
+      exit(EXIT_FAILURE);
     }
   }
   return NULL;
@@ -184,7 +283,6 @@ static void _conn_handler_free_handler_data(linked_list_node_t *node) {
     return;
   }
   conn_handler_t *h = (conn_handler_t *)(node->data);
-  pthread_join(h->handler_thread, NULL);
   free(h->client_address);
   free(h);
 }
@@ -194,4 +292,16 @@ static int __conn_handler_write_to_outfile_threadsafe(char *line, size_t line_le
   int bytes_written = write(outfilefd, line, line_len);
   pthread_mutex_unlock(&outfile_lock);
   return bytes_written;
+}
+
+static void get_peer_address(struct sockaddr *sa, char *addr_buffer, int maxlen) {
+  switch (sa->sa_family) {
+    case AF_INET:
+      inet_ntop(AF_INET, &(((struct sockaddr_in *)sa)->sin_addr), addr_buffer, maxlen);   
+      break;
+
+    case AF_INET6:
+      inet_ntop(AF_INET6, &(((struct sockaddr_in6 *)sa)->sin6_addr), addr_buffer, maxlen);
+      break;
+  }
 }

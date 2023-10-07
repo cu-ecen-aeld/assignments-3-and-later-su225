@@ -25,4 +25,6 @@ void linked_list_remove_node(
   void (*node_data_cleanup_func)(linked_list_node_t *)
 );
 
+void linked_list_destroy(linked_list_t *list, void (*node_data_cleanup_func)(linked_list_node_t *));
+
 #endif
