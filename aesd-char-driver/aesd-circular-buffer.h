@@ -1,10 +1,3 @@
-/*
- * aesd-circular-buffer.h
- *
- *  Created on: March 1st, 2020
- *      Author: Dan Walkes
- */
-
 #ifndef AESD_CIRCULAR_BUFFER_H
 #define AESD_CIRCULAR_BUFFER_H
 
@@ -40,15 +33,15 @@ struct aesd_circular_buffer
      * The current location in the entry structure where the next write should
      * be stored.
      */
-    uint8_t in_offs;
+    __u8 in_offs;
     /**
      * The first location in the entry structure to read from
      */
-    uint8_t out_offs;
+    __u8 out_offs;
     /**
      * set to true when the buffer entry structure is full
      */
-    bool full;
+    __u8 full;
 };
 
 extern struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
@@ -57,6 +50,9 @@ extern struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos
 extern void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry);
 
 extern void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer);
+
+extern void aesd_circular_buffer_destroy(struct aesd_circular_buffer *buffer);
+
 
 /**
  * Create a for loop to iterate over each member of the circular buffer.
